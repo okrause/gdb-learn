@@ -1,0 +1,8 @@
+gradebook
+crash_roster
+core
+core.*
+*.core
+*.o
+__pycache__/
+*.pyc
