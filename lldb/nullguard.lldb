@@ -1,0 +1,3 @@
+# Sets a breakpoint on announce_top that stops only when s is NULL.
+#   lldb -s lldb/nullguard.lldb ./crash_roster
+command script import lldb/python/null_guard.py

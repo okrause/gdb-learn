@@ -1,0 +1,4 @@
+# Custom commands only.
+#   lldb -s lldb/commands.lldb ./gradebook
+command script import lldb/python/dump_roster.py
+command script import lldb/python/explain_avg.py

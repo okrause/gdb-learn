@@ -1,138 +1,124 @@
-# 2. Crash and core dump
+# 2. Analyze a crash and core dump
 
-Program: `crash_roster.c`. A core dump is a snapshot of the process at the
-moment it died. Load the **same binary** plus the dump in GDB and inspect it
-as if you had been attached.
-
-This pack does **not** include a core file. Produce one on the Linux machine
-where you crash the program (instructions below).
+`crash_roster.c` looks up a student and passes the result to `announce_top`
+without checking for `NULL`. A core dump is a snapshot of a process at the
+moment it died. You need the dump and the exact binary that created it.
 
 ```bash
 make crash_roster
 ```
 
-| Run | What happens |
-|-----|----------------|
-| `./crash_roster` | Looks up id **999**, `find_by_id` returns `NULL`, `announce_top` dereferences it → **segfault** (exit **139**) |
-| `./crash_roster 103` | Prints Grace, exits 0 |
-| `./crash_roster uaf` | Frees the list, then uses the old pointer (use-after-free) |
+| Run | Result |
+|-----|--------|
+| `./crash_roster` | Looks up missing ID 999 and dereferences `NULL` |
+| `./crash_roster 103` | Prints Grace and exits successfully |
+| `./crash_roster uaf` | Uses a pointer after freeing the list |
 
-## Live crash (no core file)
+## Inspect the live crash
 
-Same as the first tutorial, except you **let it die** instead of only using
-breakpoints.
+```text
+lldb ./crash_roster
+(lldb) run
+```
+
+LLDB stops on `SIGSEGV` in `announce_top`. Inspect the failure:
+
+```text
+(lldb) bt
+(lldb) frame variable
+(lldb) p s
+(lldb) p s->name
+(lldb) frame select 1
+(lldb) frame variable want_id chosen roster
+(lldb) p *roster
+(lldb) disassemble -p
+(lldb) register read
+```
+
+Confirm that:
+
+- `s` and `chosen` are zero
+- `want_id` is 999
+- `roster` still points to Grace, Alan, and Ada
+- the current instruction reads through the invalid pointer
+
+Register names depend on the CPU, not the debugger. On x86-64, function
+arguments often appear in `$rdi`, `$rsi`, and later registers. On AArch64
+(including Apple Silicon), begin with `$x0`.
+
+To stop on `SIGSEGV` without passing it to the program:
+
+```text
+(lldb) process handle -p false -s true -n true SIGSEGV
+(lldb) run
+```
+
+GDB reference:
 
 ```text
 gdb ./crash_roster
-(gdb) run
-```
-
-GDB stops on the signal instead of quitting:
-
-```text
-Program received signal SIGSEGV, Segmentation fault.
-0x... in announce_top (s=0x0) at crash_roster.c:...
-    printf("Selected: %s (id %d, avg %.1f)\n", s->name, s->id, s->average);
-```
-
-Inspect:
-
-```text
-(gdb) backtrace
-(gdb) info args
-(gdb) print s
-(gdb) print s->name          # fails: cannot access memory at 0x0
-(gdb) frame 1                # main
-(gdb) info locals
-(gdb) print want_id
-(gdb) print roster
-(gdb) print *roster          # list is still valid; the bug is the missing check
-(gdb) print chosen
-(gdb) x/i $pc
-(gdb) info registers
-```
-
-What you want to confirm:
-
-- `s` / `chosen` is `0x0`
-- `want_id` is `999`
-- `roster` is a real list (Grace / Alan / Ada)
-- the faulting instruction is the load of `s->name`
-
-On x86-64, `$rsi` / `$rdi` often hold the bad pointer. On aarch64, look at
-`$x0` (first argument).
-
-Optional: catch the signal without delivering it to the process:
-
-```text
 (gdb) handle SIGSEGV stop print nopass
 (gdb) run
+(gdb) bt
+(gdb) info args
+(gdb) frame 1
+(gdb) info locals
 ```
 
-You cannot usefully `next` / `step` / `continue` after a fatal fault in a
-core dump (the process is already dead). Live GDB after `SIGSEGV` is the same
-for inspection; `continue` usually lets the process die for good.
+Continuing a live process after the fatal signal normally lets it terminate.
+A process loaded from a core is already dead, so it cannot step or continue.
 
-## What a core dump is
+## What is in a core
 
-When the kernel delivers a fatal signal (`SIGSEGV`, `SIGABRT`, `SIGILL`, …)
-it **may** write a file containing:
-
-- all thread stacks
-- registers
-- mapped memory (heap, stack, sometimes file-backed mappings)
-
-It is not a substitute for the binary. You always need the **same build**
-that crashed (`-g` still required):
+A core may contain thread stacks, registers, and mapped memory. Debug symbols
+remain in the executable, so keep the exact unstripped binary from the crash:
 
 ```text
-gdb ./crash_roster core
+lldb ./crash_roster -c crash_roster.core
 ```
 
-A stripped or rebuilt binary with different addresses makes the dump much
-harder to read.
+GDB loads the same pair with:
 
-## Generate a core dump yourself (Linux)
+```text
+gdb ./crash_roster crash_roster.core
+```
 
-Cores are often disabled (`ulimit -c` is `0`). Enable them **in the same
-shell** that will run the program:
+## Generate a core on Linux
+
+Kernel core dumps are often disabled. Enable them in the shell that launches
+the program:
 
 ```bash
 ulimit -c unlimited
-ulimit -c                 # should print "unlimited"
+ulimit -c
 ./crash_roster
-# Segmentation fault (core dumped)
 ls -l core core.*
 ```
 
-If you see the crash but **no** “core dumped” and no file:
+If no file appears, inspect:
 
 ```bash
-ulimit -c
 cat /proc/sys/kernel/core_pattern
 ```
 
-`ulimit -c` must not be `0`. `core_pattern` decides **where** the dump goes.
+| Pattern | Destination |
+|---------|-------------|
+| `core` | `./core` |
+| `core.%p` | `./core.<pid>` |
+| `core.%e.%p` | `./core.crash_roster.<pid>` |
+| `|...apport...` | Ubuntu apport handles the dump |
+| `|...systemd-coredump` | Retrieve it with `coredumpctl` |
 
-| `core_pattern` | Where the dump goes |
-|----------------|---------------------|
-| `core` | `./core` in the current working directory |
-| `core.%p` | `core.<pid>` in the cwd |
-| `core.%e.%p` | `core.crash_roster.<pid>` |
-| `|/usr/share/apport/apport ...` | Ubuntu: handled by apport, **not** a `core` file in cwd |
-| `|/usr/lib/systemd/systemd-coredump` | systemd: use `coredumpctl` |
+A leading `|` pipes the dump to a service rather than writing it in the
+current directory.
 
-A pattern that starts with `|` means the kernel **pipes** the dump to a
-program. You will not get `./core` unless you dump it out of that system.
-
-### systemd (`coredumpctl`)
+### systemd-coredump
 
 ```bash
 coredumpctl list crash_roster
 coredumpctl debug crash_roster
-# or write a file you can copy:
 coredumpctl dump crash_roster -o ./crash_roster.core
-gdb ./crash_roster ./crash_roster.core
+lldb ./crash_roster -c ./crash_roster.core
 ```
 
 ### Ubuntu apport
@@ -140,13 +126,13 @@ gdb ./crash_roster ./crash_roster.core
 ```bash
 ls /var/crash
 apport-unpack /var/crash/_*.crash /tmp/crash-unpacked
-gdb ./crash_roster /tmp/crash-unpacked/CoreDump
+lldb ./crash_roster -c /tmp/crash-unpacked/CoreDump
 ```
 
-### Write `core.<program>.<pid>` in the current directory
+### Change the kernel filename pattern
 
-Only if you may change sysctl on that machine (not on a shared production
-box without care):
+Only do this on a machine where changing the system-wide setting is
+appropriate:
 
 ```bash
 echo 'core.%e.%p' | sudo tee /proc/sys/kernel/core_pattern
@@ -155,123 +141,74 @@ ulimit -c unlimited
 ls -l core.crash_roster.*
 ```
 
-### Snapshot from a live GDB session (no kernel dump)
+## Save a core from LLDB
 
-If the kernel never writes a file, you can still save a dump from GDB after
-the live `SIGSEGV`:
+This avoids dependence on the kernel's core-file destination:
 
 ```text
-gdb ./crash_roster
-(gdb) run
+lldb ./crash_roster
+(lldb) run
 # after SIGSEGV:
-(gdb) generate-core-file crash_roster.core
-(gdb) quit
-gdb ./crash_roster crash_roster.core
+(lldb) process save-core crash_roster.core
+(lldb) quit
+lldb ./crash_roster -c crash_roster.core
 ```
 
-Use the **same** `crash_roster` binary that produced the dump.
+GDB uses `generate-core-file crash_roster.core`.
 
-## Post-mortem: `gdb ./crash_roster core`
+## macOS notes
 
-Replace `core` with the actual filename (`core`, `core.12345`,
-`crash_roster.core`, …).
+macOS does not have `/proc`, systemd-coredump, or apport. Fatal crashes
+normally create `.ips` reports under `~/Library/Logs/DiagnosticReports/`;
+those reports are useful for symbolication but are not LLDB core files.
+
+For this tutorial, prefer `process save-core` after LLDB catches the live
+crash. System-generated cores, when enabled with `ulimit -c unlimited`, are
+normally written under `/cores` according to `sysctl kern.corefile`. Host
+security settings can still prevent their creation.
+
+## Post-mortem inspection
 
 ```text
-gdb ./crash_roster core
+lldb ./crash_roster -c crash_roster.core
+(lldb) bt
+(lldb) frame select 0
+(lldb) frame variable
+(lldb) p s
+(lldb) type lookup Student
+(lldb) frame select 1
+(lldb) frame variable want_id chosen roster
+(lldb) register read
+(lldb) disassemble -p
+(lldb) thread backtrace all
 ```
 
-GDB should print something like:
+Use `memory read`, `expression`, `disassemble`, and frame navigation normally.
+Only execution commands are unavailable.
+
+## Optional use-after-free path
 
 ```text
-Core was generated by `./crash_roster'.
-Program terminated with signal SIGSEGV, Segmentation fault.
-#0  announce_top (s=0x0) at crash_roster.c:...
+lldb ./crash_roster
+(lldb) settings set target.run-args uaf
+(lldb) breakpoint set -n announce_top
+(lldb) run
+(lldb) frame variable s
+(lldb) p s->name
+(lldb) memory read -c 32 -f x -s 1 s
 ```
 
-Then the same inspection as a live crash:
+The pointer is non-NULL but no longer owns live storage. It may display old
+data, garbage, or fault. GDB uses `set args uaf`, `break announce_top`, and
+`x/32xb s`.
 
-```text
-(gdb) bt
-(gdb) bt full
-(gdb) frame 0
-(gdb) print s
-(gdb) ptype Student
-(gdb) frame 1
-(gdb) print want_id
-(gdb) print chosen
-(gdb) print roster->name
-(gdb) print roster->next->name
-(gdb) info registers
-(gdb) x/i $pc
-(gdb) thread apply all bt    # one thread here; habit for real crashes
-```
+## Read the bug from the evidence
 
-You cannot `next` / `step` / `continue` in a meaningful way: the process is
-already dead. You can still `print`, `x`, `disassemble`, and walk frames.
+1. `main` sets `want_id` to 999.
+2. `find_by_id` reaches the end of the list and returns `NULL`.
+3. `announce_top(NULL)` reads `s->name` and faults.
 
-## Suggested session
+The eventual source fix is a `chosen == NULL` check before `announce_top`.
+Keep the bug while completing the remaining debugger exercises.
 
-```text
-# live
-gdb ./crash_roster
-(gdb) run
-(gdb) bt
-(gdb) print s
-(gdb) up
-(gdb) print want_id
-(gdb) print chosen
-(gdb) print *roster
-(gdb) quit
-
-# then, in the shell, generate a core (pick one method above), e.g.:
-#   ulimit -c unlimited && ./crash_roster
-# or from GDB: generate-core-file crash_roster.core
-
-# post-mortem
-gdb ./crash_roster core
-(gdb) bt full
-(gdb) print s
-(gdb) quit
-```
-
-## Optional: use-after-free path
-
-```text
-gdb ./crash_roster
-(gdb) set args uaf
-(gdb) break announce_top
-(gdb) run
-(gdb) print s
-(gdb) print s->name
-(gdb) x/32xb s
-(gdb) continue
-```
-
-`s` is **not** NULL. It still looks like an address. `s->name` may still
-print `"Grace"` or garbage, or it may `SIGSEGV` if the page was unmapped.
-That is why UAF is nastier than a NULL deref: the dump may show a plausible
-`Student` that is already freed.
-
-`find_by_id` + missing NULL check is the clearer first crash.
-
-## How to read this bug from the dump
-
-1. `main` sets `want_id = 999`
-2. `find_by_id(roster, 999)` walks Grace → Alan → Ada, then returns `NULL`
-3. `announce_top(NULL)` loads `s->name` → fault at address `0`
-
-Fix in source: check before use:
-
-```c
-chosen = find_by_id(roster, want_id);
-if (chosen == NULL) {
-    fprintf(stderr, "no student with id %d\n", want_id);
-    free_roster(roster);
-    return 1;
-}
-announce_top(chosen);
-```
-
-Rebuild and `run` again: no `SIGSEGV`, no core.
-
-Next: [03-python.md](03-python.md) (pretty-printers, `dump-roster`, NULL-guard breakpoint).
+Next: [LLDB Python integration](03-python.md).

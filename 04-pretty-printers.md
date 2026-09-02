@@ -1,194 +1,177 @@
-# 4. Pretty-printers (Python)
+# 4. LLDB data formatters
 
-A pretty-printer is a Python object GDB calls instead of dumping a struct
-field-by-field. This tutorial uses `python/student_printers.py` with the
-`Student` / `Score` types from `gradebook.c`.
+LLDB calls one-line displays *summaries* and customized child views
+*synthetic providers*. Together they fill the role of a GDB pretty-printer.
+This lesson uses `lldb/python/student_formatters.py`.
 
-Official docs:
-[Pretty Printing API](https://sourceware.org/gdb/current/onlinedocs/gdb.html/Pretty-Printing-API.html).
-
-Work from `gdb-learn/` so imports resolve.
+Official reference:
+[LLDB variable formatting](https://lldb.llvm.org/use/variable.html).
 
 ## What the example registers
 
-| C type | Printer | `print` looks like |
-|--------|---------|----------------------|
-| `Score` | `ScorePrinter` | `quiz=90` |
-| `Student` | `StudentPrinter` | `Student('Grace', id=103, avg=78.8, n=4)` plus children |
-| `Student *` | `StudentListPrinter` | walks `->next` as a list |
+| C type | Summary | Synthetic children |
+|--------|---------|--------------------|
+| `Score` | `quiz=90` | Default fields |
+| `Student` | `Student('Grace', id=103, avg=78.8, n=4)` | Used scores plus `next` |
+| `Student *` | `Student list (3 nodes)` | Students reached through `next` |
 
-`to_string()` is the one-line summary. `children()` is what GDB expands.
-`display_hint()` is `"map"` or `"array"` so the CLI formats children like
-fields vs an index list.
+The registrations belong to the `gradebook` category, so they can be enabled,
+disabled, and deleted as a group.
 
-Registration uses `gdb.printing.register_pretty_printer` (same path
-libstdc++ uses for `std::vector`). `info pretty-printer` then shows a
-collection named `gradebook`.
-
-## 1. See the default dump (no printer)
+## See the default values
 
 ```bash
 make gradebook
-gdb ./gradebook
+lldb ./gradebook
 ```
 
 ```text
-(gdb) break print_roster
-(gdb) run
-(gdb) print *head
-(gdb) print head->scores[0]
-(gdb) print head
+(lldb) breakpoint set -n print_roster
+(lldb) run
+(lldb) frame variable head
+(lldb) p *head
+(lldb) p head->scores[0]
 ```
 
-You should get a raw struct: `name`, `id`, `scores` with `label`/`points`,
-`n_scores`, `average`, `next`. Keep this GDB session open for the next step
-(or `run` again after loading printers).
+Without custom formatters LLDB shows all struct fields.
 
-## 2. Load the printers and print again
+## Load the formatters
+
+In the same session:
 
 ```text
-(gdb) source load-python.gdb
-(gdb) python import student_printers
-loaded: pretty-printers Score, Student, Student *
+(lldb) command source lldb/formatters.lldb
+(lldb) type summary list
+(lldb) type synthetic list
+(lldb) type category list
+```
+
+Or start with:
+
+```bash
+lldb -s lldb/formatters.lldb ./gradebook
+```
+
+Print the values again:
+
+```text
+(lldb) frame variable head
+(lldb) p *head
+(lldb) p head->scores[0]
+(lldb) p head
+```
+
+The expected shape is:
+
+```text
+(Student *) head = 0x... Student list (3 nodes) {
+  [0] = Student('Grace', id=103, avg=78.8, n=4) {...}
+  [1] = Student('Alan', id=102, avg=58.6, n=4) {...}
+  [2] = Student('Ada', id=101, avg=72.6, n=4) {...}
+}
+```
+
+Exact punctuation varies by LLDB version. The important parts are the summary,
+the three linked students, and only the active scores.
+
+## Raw values and category control
+
+Bypass synthetic children and summaries:
+
+```text
+(lldb) frame variable -R head
+(lldb) frame variable -R *head
+```
+
+Disable and re-enable the entire formatter group:
+
+```text
+(lldb) type category disable gradebook
+(lldb) frame variable head
+(lldb) type category enable gradebook
+(lldb) frame variable head
+```
+
+`type category delete gradebook` removes its registrations from the session.
+
+GDB reference:
+
+```text
+gdb -x gdb/load-printers.gdb ./gradebook
 (gdb) info pretty-printer
-```
-
-You want `gradebook` in the list (global pretty-printers). Then:
-
-```text
-(gdb) print *head
-(gdb) print head->scores[0]
-(gdb) print head->scores[1]
 (gdb) print head
-(gdb) print head->next
-```
-
-Expected shape (averages are still the **buggy** ones from `gradebook.c`):
-
-```text
-(gdb) print *head
-$1 = Student('Grace', id=103, avg=78.8, n=4) = {
-  ["scores[0]"] = quiz=100,
-  ["scores[1]"] = hw=98,
-  ["scores[2]"] = mid=97,
-  ["scores[3]"] = fin=99,
-  ["next"] = 0x...
-}
-
-(gdb) print head->scores[0]
-$2 = quiz=100
-
-(gdb) print head
-$3 = Student linked list = {
-  [0] = Student('Grace', ...),
-  [1] = Student('Alan', ...),
-  [2] = Student('Ada', ...)
-}
-```
-
-`print *head` uses `Student`. `print head` uses `Student *` and walks the
-list. The `Student` printer shows `next` as an address (or `NULL`), not as
-another nested list, so `print *head` does not recurse.
-
-## 3. Raw vs pretty, enable vs disable
-
-Force the old dump without unloading the printer:
-
-```text
 (gdb) print /r *head
-(gdb) print /r head->scores[0]
-```
-
-`/r` is “raw” (disable pretty-printing for this command).
-
-Disable only this collection:
-
-```text
 (gdb) disable pretty-printer global gradebook
-(gdb) print *head
 (gdb) enable pretty-printer global gradebook
-(gdb) print *head
 ```
 
-If `disable` cannot find `gradebook`, run `info pretty-printer` and use the
-name GDB printed.
+## Pointer, struct, and NULL
 
-## 4. Pointer vs struct, NULL list
+`Student` and `Student *` have different formatters. The pointer formatter
+walks the list, while the struct formatter displays one student:
 
 ```text
-(gdb) print (Student *)0
+(lldb) p *head
+(lldb) p head
+(lldb) p (Student *)0
 ```
 
-The `Student *` printer should report `Student * NULL` instead of
-`0x0`. Still in `print_roster`:
+The final command should show `Student * NULL`. The list walk tracks visited
+addresses and caps output at 16 nodes, which prevents a corrupt cycle from
+hanging LLDB.
 
-```text
-(gdb) print head->next->next->next
-```
+## How the Python pieces fit
 
-That is Ada’s `next`, which is NULL.
+When LLDB displays a value:
 
-## 5. How the Python objects fit together
+1. A summary function receives an `SBValue` and returns text.
+2. A synthetic-provider object receives the same value.
+3. `update()` refreshes cached children after a stop.
+4. `num_children()` and `get_child_at_index()` expose the custom view.
 
-Open `python/student_printers.py` while you experiment.
-
-1. `print expr` builds a `gdb.Value`.
-2. GDB asks each registered pretty-printer `__call__(val)`.
-3. `GradebookPrinter` looks at the type name (`Score`, `Student`,
-   `Student *`) and returns a printer instance or `None`.
-4. GDB calls `to_string()`, then `children()` if you expand the value.
-
-Minimal printer (only a summary, no children):
+A summary is small:
 
 ```python
-class ScorePrinter:
-    def __init__(self, val):
-        self.val = val
-
-    def to_string(self):
-        return f"{self.val['label'].string()}={float(self.val['points']):.0f}"
+def score_summary(valobj, internal_dict):
+    raw = valobj.GetNonSyntheticValue()
+    label = raw.GetChildMemberWithName("label").GetSummary().strip('"')
+    points = float(raw.GetChildMemberWithName("points").GetValue())
+    return f"{label}={points:.0f}"
 ```
 
-`StudentPrinter.children` yields `(name, gdb.Value)` pairs. Yielding
-`scores[i]` (type `Score`) means those children are pretty-printed too.
+The module's `__lldb_init_module` function registers summaries and synthetic
+providers when `command script import` loads it.
 
-`StudentListPrinter` walks `node = node["next"]`, with a cycle check and a
-16-node cap so a corrupted list cannot hang GDB.
+GDB combines the one-line text and children in one pretty-printer object with
+`to_string()` and `children()`. See `gdb/python/student_printers.py`.
 
-## 6. Suggested session (copy this)
+## Reload after editing
 
-From `gdb-learn/`:
+LLDB can reload a Python command script:
 
 ```text
-gdb -x load-printers.gdb ./gradebook
-(gdb) info pretty-printer
-(gdb) break print_roster
-(gdb) run
-(gdb) print *head
-(gdb) print head->scores[0]
-(gdb) print head
-(gdb) print /r *head
-(gdb) disable pretty-printer global gradebook
-(gdb) print *head
-(gdb) enable pretty-printer global gradebook
-(gdb) print (Student *)0
-(gdb) quit
+(lldb) command script import --allow-reload lldb/python/student_formatters.py
 ```
 
-`load-printers.gdb` is `load-python.gdb` plus `import student_printers`.
+The module first replaces the named category, preventing duplicate
+registrations. Restarting LLDB is also a reliable clean reload.
 
-## 7. Reload after you edit the printer
-
-If you change `python/student_printers.py` in another window:
+## Suggested session
 
 ```text
-(gdb) python import importlib, student_printers; importlib.reload(student_printers)
+lldb -s lldb/formatters.lldb ./gradebook
+(lldb) breakpoint set -n print_roster
+(lldb) run
+(lldb) type category list
+(lldb) p *head
+(lldb) p head->scores[0]
+(lldb) p head
+(lldb) frame variable -R head
+(lldb) type category disable gradebook
+(lldb) frame variable head
+(lldb) type category enable gradebook
+(lldb) p (Student *)0
+(lldb) quit
 ```
 
-`register_pretty_printer(..., replace=True)` replaces the previous
-`gradebook` collection so you should not get duplicates.
-
-## Next
-
-You can combine this with [03-python.md](03-python.md): `dump-roster` walks
-the list as a command; the `Student *` printer walks it when you `print`.
+Use [cheatsheet.md](cheatsheet.md) when translating another GDB workflow.

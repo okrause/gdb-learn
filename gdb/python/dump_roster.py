@@ -1,27 +1,15 @@
-# Copyright 2026 "Google LLC"
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """GDB command: dump-roster [head-expression]"""
 
 import gdb
+
+MAX_NODES = 16
 
 
 class DumpRoster(gdb.Command):
     """Dump the student linked list from a head pointer.
 
     Usage: dump-roster [expression]
-    Default expression is roster (main) or head if that fails.
+    Defaults to roster, falling back to head.
     """
 
     def __init__(self):
@@ -35,14 +23,29 @@ class DumpRoster(gdb.Command):
                 expr = "roster"
             except gdb.error:
                 expr = "head"
+
         node = gdb.parse_and_eval(expr)
+        seen = set()
+        count = 0
+
         while node and int(node) != 0:
+            addr = int(node)
+            if addr in seen:
+                gdb.write("cycle detected\n")
+                break
+            if count >= MAX_NODES:
+                gdb.write("truncated\n")
+                break
+            seen.add(addr)
+
             s = node.dereference()
             name = s["name"].string()
             sid = int(s["id"])
             avg = float(s["average"])
             gdb.write(f"{sid:4d}  {name:14s}  {avg:4.1f}\n")
+
             node = s["next"]
+            count += 1
 
 
 DumpRoster()

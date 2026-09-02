@@ -1,27 +1,17 @@
-# Copyright 2026 "Google LLC"
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""GDB pretty-printers for Score, Student, and Student * (linked list).
 
-"""Pretty-printers for Score, Student, and Student * (linked list).
+GDB calls the collection for every value it needs to display. Return a
+printer object, or None to fall back to the default struct dump.
 
-GDB calls lookup(val) whenever print needs to display a value. Return a
-printer object or None to use the default dump.
-
-Register with gdb.printing (libstdc++ uses the same mechanism).
+Load with:
+    (gdb) source gdb/load-python.gdb
+    (gdb) python import student_printers
 """
 
 import gdb
 import gdb.printing
+
+MAX_NODES = 16
 
 
 class ScorePrinter:
@@ -37,7 +27,7 @@ class ScorePrinter:
 
 
 class StudentPrinter:
-    """Summary line plus expandable scores and next pointer."""
+    """Summary line plus the scores in use and next as a leaf."""
 
     def __init__(self, val):
         self.val = val
@@ -54,11 +44,10 @@ class StudentPrinter:
         scores = self.val["scores"]
         for i in range(n):
             yield (f"scores[{i}]", scores[i])
+        # Printed as an address so expanding a Student does not recurse
+        # into the whole list.
         nxt = self.val["next"]
-        if int(nxt) == 0:
-            yield ("next", "NULL")
-        else:
-            yield ("next", str(nxt))
+        yield ("next", "NULL" if int(nxt) == 0 else str(nxt))
 
     def display_hint(self):
         return "map"
@@ -88,7 +77,7 @@ class StudentListPrinter:
             yield (f"[{i}]", node.dereference())
             node = node.dereference()["next"]
             i += 1
-            if i >= 16:
+            if i >= MAX_NODES:
                 yield ("[...]", "truncated")
                 break
 
@@ -104,9 +93,7 @@ def _type_name(val):
     if t.code == gdb.TYPE_CODE_PTR:
         inner = t.target().strip_typedefs().unqualified()
         inner_name = inner.name or inner.tag
-        if inner_name:
-            return inner_name + " *"
-        return None
+        return inner_name + " *" if inner_name else None
     return t.name or t.tag
 
 
@@ -127,7 +114,5 @@ class GradebookPrinter(gdb.printing.PrettyPrinter):
         return None
 
 
-gdb.printing.register_pretty_printer(
-    None, GradebookPrinter(), replace=True
-)
-print("loaded: pretty-printers Score, Student, Student *")
+gdb.printing.register_pretty_printer(None, GradebookPrinter(), replace=True)
+print("loaded: GDB pretty-printers for Score, Student, Student *")

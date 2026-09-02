@@ -1,0 +1,8 @@
+# Formatters plus custom commands.
+#   lldb -s lldb/lldbinit ./gradebook
+#
+# Paths are relative to the current directory, so run lldb from the repo
+# root. This is a command file passed with -s, not the automatic
+# ~/.lldbinit.
+command source lldb/formatters.lldb
+command source lldb/commands.lldb

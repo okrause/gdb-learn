@@ -1,0 +1,3 @@
+# Data formatters only.
+#   lldb -s lldb/formatters.lldb ./gradebook
+command script import lldb/python/student_formatters.py

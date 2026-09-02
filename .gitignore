@@ -4,5 +4,6 @@ core
 core.*
 *.core
 *.o
+*.dSYM/
 __pycache__/
 *.pyc

@@ -1,256 +1,188 @@
 # 1. Inspect a running program
 
-Program: `gradebook.c`. It builds a linked list of students, each with nested
-`Score` structs. **Averages are wrong on purpose** (`sum / (n + 1)` instead of
-`sum / n`) so you have something real to inspect.
+`gradebook.c` builds a linked list of students and nested `Score` values.
+Its average is deliberately wrong: it divides by `n + 1` instead of `n`.
 
 ```bash
 make gradebook
-gdb ./gradebook
+lldb ./gradebook
 ```
 
-## Load, list, run
+## Load, list, and run
 
-| Command | What it does |
-|---------|----------------|
-| `file ./gradebook` | Load a binary (already done if you started `gdb ./gradebook`) |
-| `list` / `list main` / `l 49,67` | Show source |
-| `run` / `r` | Start from the beginning |
-| `start` | Run and stop at the first line of `main` |
-| `quit` / `q` | Exit |
+| Task | LLDB | GDB reference |
+|------|------|---------------|
+| Load a binary | `target create ./gradebook` | `file ./gradebook` |
+| List a function | `source list -n main` | `list main` |
+| Run | `run` | `run` |
+| Stop at `main` | `breakpoint set -n main`, then `run` | `start` |
+| Quit | `quit` | `quit` |
+
+Try:
 
 ```text
-(gdb) list main
-(gdb) start
+(lldb) source list -n main
+(lldb) breakpoint set -n main
+(lldb) run
 ```
 
-You should stop in `main` with `roster` still `NULL`.
+You should stop in `main` while `roster` is still `NULL`.
 
 ## Breakpoints
 
-| Command | What it does |
-|---------|----------------|
-| `break main` | Stop at function entry |
-| `break gradebook.c:66` | Stop at a line |
-| `break compute_average` | Stop every time that function runs |
-| `break compute_average if n == 4` | Conditional |
-| `info breakpoints` | List them |
-| `delete 1` / `disable 1` / `enable 1` | Manage them |
-| `tbreak compute_average` | One-shot breakpoint |
+| Task | LLDB | GDB reference |
+|------|------|---------------|
+| Function | `breakpoint set -n compute_average` | `break compute_average` |
+| Source line | `breakpoint set -f gradebook.c -l 52` | `break gradebook.c:52` |
+| Conditional | `breakpoint set -n compute_average -c 'n == 4'` | `break compute_average if n == 4` |
+| One-shot | `breakpoint set -o true -n find_top` | `tbreak find_top` |
+| List | `breakpoint list` | `info breakpoints` |
+| Manage ID 1 | `breakpoint delete 1`, `disable 1`, `enable 1` | `delete 1`, `disable 1`, `enable 1` |
 
 ```text
-(gdb) break compute_average
-(gdb) break find_top
-(gdb) info breakpoints
-(gdb) run
+(lldb) breakpoint set -n compute_average
+(lldb) breakpoint set -n find_top
+(lldb) breakpoint list
+(lldb) run
 ```
 
-You hit `compute_average` first (Ada is built first). `continue` (`c`) hits it
-again for Alan and Grace.
+`continue` (`c`) reaches later calls.
 
-## Stepping vs running
+## Step through code
 
-| Command | What it does |
-|---------|----------------|
-| `next` / `n` | Next **line in this function** (does not enter callees) |
-| `step` / `s` | Step **into** a function call |
-| `finish` | Run until the **current function returns** |
-| `until 90` | Run until that line (useful to skip a loop) |
-| `continue` / `c` | Run until the next breakpoint |
-| `stepi` / `nexti` | Step one **machine instruction** |
+| Task | LLDB | GDB reference |
+|------|------|---------------|
+| Step over a call | `thread step-over` or `n` | `next` |
+| Step into a call | `thread step-in` or `s` | `step` |
+| Finish the frame | `thread step-out` or `finish` | `finish` |
+| Run to a line | `thread until 52` | `until 52` |
+| Continue | `continue` or `c` | `continue` |
+| One instruction | `thread step-inst` | `stepi` |
 
-Rule of thumb: `next` to skim, `step` when you want to see inside
-`compute_average` or `make_student`.
+Use `n` to skim and `s` to enter `make_student` or `compute_average`.
 
-From `main`:
+## Inspect values and types
+
+Stop in `compute_average`:
 
 ```text
-(gdb) start
-(gdb) next          # skip declarations
-(gdb) next          # until push_front / make_student
-(gdb) step          # into make_student
-(gdb) next
-(gdb) step          # into compute_average
+(lldb) frame variable
+(lldb) frame variable n sum i
+(lldb) p scores[0]
+(lldb) p scores[0].points
+(lldb) p scores[0].label
+(lldb) parray n scores
 ```
 
-## Looking up values
-
-Stop inside `compute_average` (`break compute_average` then `run`).
+`frame variable` reads known variables without running arbitrary code.
+`expression` (alias `p`) evaluates a C expression.
 
 ```text
-(gdb) info args
-(gdb) info locals
-(gdb) print n
-(gdb) print sum
-(gdb) print i
-(gdb) print scores[0]
-(gdb) print scores[0].points
-(gdb) print scores[0].label
-(gdb) print *scores@n          # GDB array slice: n Score objects
+(lldb) expression -f hex -- n
+(lldb) expression -f binary -- n
+(lldb) expression -f float -- sum
+(lldb) frame variable -T scores
+(lldb) type lookup Student
+(lldb) type lookup Score
 ```
 
-Formats:
+GDB equivalents are `info args`, `info locals`, `print`, `print *scores@n`,
+`whatis`, and `ptype`.
+
+To display a value after every stop, use a stop hook:
 
 ```text
-(gdb) p/x n            # hex
-(gdb) p/t n            # binary
-(gdb) p/f sum          # float
-(gdb) p (int)sum
-(gdb) whatis scores
-(gdb) ptype Student    # full struct layout
-(gdb) ptype Score
+(lldb) target stop-hook add -o "frame variable sum i"
+(lldb) target stop-hook list
+(lldb) target stop-hook delete 1
 ```
 
-Watch a value update as you step:
+GDB uses `display sum` and `undisplay <number>`.
+
+## Walk the linked list
 
 ```text
-(gdb) display sum
-(gdb) display i
-(gdb) next
-(gdb) next
-```
-
-`display` reprints those expressions after every stop. `undisplay 1` removes
-one.
-
-Walk the linked list after the three `push_front`s (for example at
-`print_roster`):
-
-```text
-(gdb) break print_roster
-(gdb) run
-(gdb) print *head
-(gdb) print *head->next
-(gdb) print head->next->next->name
-(gdb) print head->scores[2].points
-(gdb) p head->average
-(gdb) p head->n_scores
+(lldb) breakpoint set -n print_roster
+(lldb) run
+(lldb) frame variable head
+(lldb) p *head
+(lldb) p *head->next
+(lldb) p head->next->next->name
+(lldb) p head->scores[2].points
 ```
 
 Examine raw memory:
 
 ```text
-(gdb) x/s head->name            # C string at that address
-(gdb) x/16xb head               # 16 bytes of the struct in hex
+(lldb) memory read -f c-string head->name
+(lldb) memory read -c 16 -f x -s 1 head
 ```
 
-`x` syntax: `x/<count><format><size>`  
-formats: `x` hex, `d` decimal, `f` float, `s` string, `i` instruction.
+LLDB also provides the GDB-compatible alias `x/16xb head`.
 
-## Call stack
-
-`compute_average` is not called from `main` directly:
+## Stack frames and recursion
 
 ```text
-(gdb) backtrace
-(gdb) bt full          # locals in every frame
-(gdb) frame 1          # jump to make_student
-(gdb) info locals
-(gdb) print name
-(gdb) print *s
-(gdb) up
-(gdb) down
+(lldb) bt
+(lldb) frame select 1
+(lldb) frame variable
+(lldb) up
+(lldb) down
 ```
 
-When you stop in `find_top`, `bt` shows **recursion**. Use `frame N` and
-`print head->name` in each frame.
+GDB's `bt full` prints locals for all frames in one command. In LLDB, use
+`bt`, select interesting frames, and run `frame variable`. When stopped in
+`find_top`, the backtrace shows its recursive calls.
 
 ## Watchpoints
 
 ```text
-(gdb) break compute_average
-(gdb) run
-(gdb) watch sum
-(gdb) continue
+(lldb) breakpoint set -n compute_average
+(lldb) run
+(lldb) watchpoint set variable sum
+(lldb) continue
 ```
 
-GDB stops whenever `sum` is written. Local watchpoints expire when the
-function returns — that is expected.
+Inside `make_student`, `watchpoint set expression -- s->average` stops when
+the average is stored. Hardware watchpoints are limited, and a watchpoint on a
+local variable expires after its stack frame returns.
 
-Inside `make_student`:
+GDB uses `watch sum` and `watch s->average`.
+
+## Confirm the bug and override one return
+
+At the return line in `compute_average`:
 
 ```text
-(gdb) watch s->average
+(lldb) thread until 52
+(lldb) p sum
+(lldb) p n
+(lldb) p sum / n
+(lldb) p sum / (n + 1)
+(lldb) thread return sum / n
 ```
 
-stops when the buggy average is stored.
+Grace's scores total 394. The correct average is 98.5, while the program
+returns 78.8. `thread return` forces the scalar return value for this call.
+GDB's equivalent is `return sum / n`.
 
-## Confirm the bug, then change state
-
-Inside `compute_average`, after the loop (`until` the `return` line):
-
-```text
-(gdb) print sum
-(gdb) print n
-(gdb) print sum / n          # correct average
-(gdb) print sum / (n + 1)    # what the code does
-(gdb) return sum / n         # force the correct return this time
-```
-
-Grace’s scores are `100, 98, 97, 99` → sum `394`. Correct avg `98.5`. The
-program prints `78.8` because `394 / 5`.
-
-Fix in source:
+The source fix is:
 
 ```c
-return sum / n;   /* not (n + 1) */
+return sum / n;
 ```
 
-Rebuild (`make gradebook`) and `run` again in the same GDB session; GDB
-reloads the new binary.
+Do not apply it until you finish the exercises that rely on the bug.
 
-## Extra commands
+## Useful extras
 
-| Command | What it does |
-|---------|----------------|
-| `info functions` | List symbols |
-| `info variables` | Globals |
-| `info registers` | CPU registers |
-| `disassemble compute_average` | Machine code |
-| `layout src` | TUI: source + command pane (`Ctrl-X A` to leave) |
-| `set args foo bar` | `argc` / `argv` (this demo has none) |
-| `call printf("%s\n", head->name)` | Call a function from the debugger |
+| Task | LLDB | GDB reference |
+|------|------|---------------|
+| Find a symbol | `image lookup -n compute_average` | `info functions compute_average` |
+| Registers | `register read` | `info registers` |
+| Disassemble | `disassemble -n compute_average` | `disassemble compute_average` |
+| Curses UI | `gui` | `layout src` |
+| Set arguments | `settings set target.run-args foo bar` | `set args foo bar` |
+| Call a function | `expression (void)printf("%s\n", head->name)` | `call printf("%s\n", head->name)` |
 
-## Suggested first session
-
-```text
-gdb ./gradebook
-(gdb) list compute_average
-(gdb) break compute_average
-(gdb) run
-(gdb) info args
-(gdb) info locals
-(gdb) ptype Score
-(gdb) print *scores@n
-(gdb) display sum
-(gdb) next
-(gdb) next
-(gdb) next
-(gdb) print sum / n
-(gdb) print sum / (n + 1)
-(gdb) finish
-(gdb) print s->name
-(gdb) print s->average
-(gdb) continue          # Alan
-(gdb) continue          # Grace
-(gdb) break find_top
-(gdb) continue
-(gdb) backtrace
-(gdb) print head->name
-(gdb) continue          # recurse
-(gdb) bt
-(gdb) quit
-```
-
-Unfixed run (what you should see without GDB):
-
-```text
- 103  Grace           78.8  quiz=100,hw=98,mid=97,fin=99
- 102  Alan            58.6  quiz=70,hw=75,mid=68,fin=80
- 101  Ada             72.6  quiz=90,hw=88,mid=94,fin=91
-Top student: Grace (avg 78.8)
-```
-
-After you fix the divisor, Grace should be about **98.5**.
-
-Next: [02-crash-core.md](02-crash-core.md), then [03-python.md](03-python.md).
+Next: [Crash and core dumps](02-crash-core.md).
